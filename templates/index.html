@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>智能通讯录管理系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f8f9fa; }
+        .contact-card { transition: transform 0.2s; border: none; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .contact-card:hover { transform: translateY(-3px); box-shadow: 0 5px 15px rgba(0,0,0,0.15); }
+        .fav-icon { cursor: pointer; color: #ccc; font-size: 1.2rem; }
+        .fav-icon.active { color: #ffc107; } /* 金色星星 */
+        .detail-badge { font-size: 0.85rem; margin-right: 5px; margin-bottom: 5px; display: inline-block;}
+    </style>
+</head>
+<body>
+
+<div class="container py-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2 class="text-primary"><i class="fas fa-address-book"></i> 通讯录</h2>
+        <div>
+            <div class="btn-group me-2" role="group">
+                <input type="checkbox" class="btn-check" id="btn-check-fav" autocomplete="off" onchange="loadContacts()">
+                <label class="btn btn-outline-warning" for="btn-check-fav"><i class="fas fa-star"></i> 只看收藏</label>
+            </div>
+            
+            <button class="btn btn-success me-2" onclick="document.getElementById('fileInput').click()">
+                <i class="fas fa-file-excel"></i> 导入
+            </button>
+            <input type="file" id="fileInput" hidden accept=".xlsx, .xls" onchange="importExcel(this)">
+            
+            <a href="/api/export" class="btn btn-outline-success me-2"><i class="fas fa-download"></i> 导出</a>
+            
+            <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addModal">
+                <i class="fas fa-plus"></i> 新建
+            </button>
+        </div>
+    </div>
+
+    <div class="row" id="contactList">
+        </div>
+</div>
+
+<div class="modal fade" id="addModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">新建联系人</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="mb-3">
+                    <label class="form-label">姓名</label>
+                    <input type="text" class="form-control" id="inputName" required>
+                </div>
+                <hr>
+                <label class="form-label">联系方式 (可添加多项)</label>
+                <div id="detailsContainer">
+                    </div>
+                <button class="btn btn-sm btn-outline-secondary mt-2" onclick="addDetailRow()">
+                    <i class="fas fa-plus-circle"></i> 添加一行
+                </button>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" onclick="saveContact()">保存</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // 页面加载完成后执行
+    document.addEventListener('DOMContentLoaded', () => {
+        loadContacts();
+        addDetailRow(); // 模态框默认给一行
+    });
+
+    // 加载联系人列表
+    async function loadContacts() {
+        const onlyFav = document.getElementById('btn-check-fav').checked;
+        const res = await fetch(`/api/contacts?favorite=${onlyFav}`);
+        const contacts = await res.json();
+        
+        const container = document.getElementById('contactList');
+        container.innerHTML = ''; // 清空
+
+        contacts.forEach(c => {
+            // 渲染联系方式详情
+            let detailsHtml = '';
+            c.details.forEach(d => {
+                let color = 'bg-secondary';
+                if(d.type.includes('手机')) color = 'bg-primary';
+                if(d.type.includes('微信')) color = 'bg-success';
+                if(d.type.includes('邮箱')) color = 'bg-info text-dark';
+                
+                detailsHtml += `<span class="badge ${color} detail-badge">
+                    <i class="fas fa-tag"></i> ${d.type}: ${d.val}
+                </span>`;
+            });
+
+            const card = `
+            <div class="col-md-4 mb-3">
+                <div class="card contact-card">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <h5 class="card-title fw-bold">${c.name}</h5>
+                            <i class="fas fa-star fav-icon ${c.is_favorite ? 'active' : ''}" 
+                               onclick="toggleFav(${c.id})"></i>
+                        </div>
+                        <div class="mb-3 mt-2">${detailsHtml}</div>
+                        <div class="text-end">
+                            <button class="btn btn-sm btn-outline-danger border-0" onclick="deleteContact(${c.id})">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+            container.innerHTML += card;
+        });
+    }
+
+    // 需求 1.2: 动态添加联系方式行
+    function addDetailRow() {
+        const div = document.createElement('div');
+        div.className = 'input-group mb-2';
+        div.innerHTML = `
+            <input type="text" class="form-control" placeholder="类型 (如: 手机)" style="max-width: 30%;">
+            <input type="text" class="form-control" placeholder="号码/账号/地址">
+            <button class="btn btn-outline-danger" type="button" onclick="this.parentElement.remove()">×</button>
+        `;
+        document.getElementById('detailsContainer').appendChild(div);
+    }
+
+    // 保存联系人
+    async function saveContact() {
+        const name = document.getElementById('inputName').value;
+        if (!name) return alert('姓名不能为空');
+
+        const details = [];
+        const rows = document.querySelectorAll('#detailsContainer .input-group');
+        rows.forEach(row => {
+            const inputs = row.querySelectorAll('input');
+            if(inputs[0].value && inputs[1].value) {
+                details.push({ type: inputs[0].value, val: inputs[1].value });
+            }
+        });
+
+        await fetch('/api/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ name, details })
+        });
+
+        // 关闭模态框并刷新
+        const modal = bootstrap.Modal.getInstance(document.getElementById('addModal'));
+        modal.hide();
+        document.getElementById('inputName').value = '';
+        document.getElementById('detailsContainer').innerHTML = '';
+        addDetailRow();
+        loadContacts();
+    }
+
+    // 收藏切换
+    async function toggleFav(id) {
+        await fetch(`/api/toggle_fav/${id}`, { method: 'POST' });
+        loadContacts();
+    }
+
+    // 删除
+    async function deleteContact(id) {
+        if(confirm('确定删除该联系人吗？')) {
+            await fetch(`/api/delete/${id}`, { method: 'POST' });
+            loadContacts();
+        }
+    }
+
+    // 需求 1.3: 导入 Excel
+    async function importExcel(input) {
+        if(!input.files[0]) return;
+        
+        const formData = new FormData();
+        formData.append('file', input.files[0]);
+
+        const res = await fetch('/api/import', {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await res.json();
+        if(data.success) {
+            alert(`成功导入 ${data.count} 条数据`);
+            loadContacts();
+        } else {
+            alert('导入失败: ' + data.msg);
+        }
+        input.value = ''; // 重置文件框
+    }
+</script>
+</body>
+</html>
