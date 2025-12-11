@@ -3,6 +3,7 @@ import json
 import pandas as pd
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import or_  # [新增] 用于多条件查询
 from io import BytesIO
 
 app = Flask(__name__)
@@ -21,7 +22,6 @@ else:
     # 2. 如果没有配置云端数据库
     if os.environ.get('VERCEL'):
         # 在 Vercel 环境下，强制使用 /tmp 目录（防止 500 只读错误）
-        # 注意：这里的数据是临时的，重启后会丢失
         print("⚠️ 未检测到数据库配置，使用临时文件系统 /tmp")
         app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:////tmp/contacts.db'
     else:
@@ -68,9 +68,23 @@ def index():
 @app.route('/api/contacts')
 def get_contacts():
     only_fav = request.args.get('favorite')
+    search_query = request.args.get('q') # [新增] 获取搜索参数
+    
     query = Contact.query
+    
+    # [新增] 搜索逻辑
+    if search_query:
+        # 在姓名或详情JSON字符串中查找
+        query = query.filter(
+            or_(
+                Contact.name.contains(search_query),
+                Contact.details.contains(search_query)
+            )
+        )
+
     if only_fav == 'true':
         query = query.filter_by(is_favorite=True)
+        
     contacts = query.order_by(Contact.is_favorite.desc(), Contact.id.desc()).all()
     return jsonify([c.to_dict() for c in contacts])
 
@@ -83,6 +97,20 @@ def add_contact():
         is_favorite=False
     )
     db.session.add(new_contact)
+    db.session.commit()
+    return jsonify({'success': True})
+
+# [新增] 更新联系人接口
+@app.route('/api/update/<int:id>', methods=['POST'])
+def update_contact(id):
+    contact = Contact.query.get(id)
+    if not contact:
+        return jsonify({'success': False, 'msg': '联系人不存在'})
+    
+    data = request.json
+    contact.name = data['name']
+    contact.details = json.dumps(data.get('details', [])) # 更新详情
+    
     db.session.commit()
     return jsonify({'success': True})
 
