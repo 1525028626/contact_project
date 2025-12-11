@@ -7,8 +7,20 @@ from io import BytesIO
 
 app = Flask(__name__)
 
-# 配置 SQLite 数据库 (无需安装，会自动创建文件)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///contacts.db'
+# --- 数据库配置修改开始 (适配 Vercel Postgres) ---
+# 尝试从环境变量获取 Vercel Postgres 的连接地址
+database_url = os.environ.get("POSTGRES_URL")
+
+if database_url:
+    # Vercel 默认返回 postgres://，而 SQLAlchemy 需要 postgresql://
+    if database_url.startswith("postgres://"):
+        database_url = database_url.replace("postgres://", "postgresql://", 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+else:
+    # 如果没有环境变量（比如在本地运行），则默认使用 SQLite
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///contacts.db'
+# --- 数据库配置修改结束 ---
+
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
@@ -26,10 +38,13 @@ class Contact(db.Model):
             'id': self.id,
             'name': self.name,
             'is_favorite': self.is_favorite,
-            'details': json.loads(self.details)
+            # 处理可能的 JSON 解析错误（防止空值报错）
+            'details': json.loads(self.details) if self.details else []
         }
 
 # 初始化数据库
+# 注意：在 Vercel 环境下，create_all 只会对 Postgres 生效一次（如果表不存在）
+# 每次部署不会覆盖已有数据
 with app.app_context():
     db.create_all()
 
@@ -48,6 +63,7 @@ def get_contacts():
     if only_fav == 'true':
         query = query.filter_by(is_favorite=True)
     
+    # 按收藏状态和ID降序排列
     contacts = query.order_by(Contact.is_favorite.desc(), Contact.id.desc()).all()
     return jsonify([c.to_dict() for c in contacts])
 
@@ -89,22 +105,29 @@ def export_excel():
     contacts = Contact.query.all()
     data_list = []
     
-    # 将 JSON 展开，简单的做法是把所有信息拼成字符串，
-    # 或者如果你想每一种联系方式一列，逻辑会复杂点。这里采用通用的“展开逻辑”。
     for c in contacts:
         row = {'姓名': c.name, '是否收藏': '是' if c.is_favorite else '否'}
-        details = json.loads(c.details)
+        try:
+            details = json.loads(c.details) if c.details else []
+        except:
+            details = []
+            
         # 将联系方式动态加入列中 (例如: 手机: 12345)
         for item in details:
-            # 防止列名重复，简单的处理
-            key = item['type']
+            key = item.get('type', '其他')
+            val = item.get('val', '')
             if key in row:
-                row[key] += f"; {item['val']}"
+                row[key] += f"; {val}"
             else:
-                row[key] = item['val']
+                row[key] = val
         data_list.append(row)
 
-    df = pd.DataFrame(data_list)
+    # 如果没有数据，创建一个空的 DataFrame，防止报错
+    if not data_list:
+        df = pd.DataFrame(columns=['姓名', '是否收藏'])
+    else:
+        df = pd.DataFrame(data_list)
+        
     output = BytesIO()
     # 写入 Excel
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
@@ -131,7 +154,9 @@ def import_excel():
             details = []
             for col in df.columns:
                 if col not in ['姓名', '是否收藏'] and row[col]:
-                    details.append({'type': col, 'val': str(row[col])})
+                    # 转换这种可能存在的 "; " 分隔的多值情况（虽然简单导入不一定能完美还原，但做个兼容）
+                    val_str = str(row[col])
+                    details.append({'type': col, 'val': val_str})
             
             new_contact = Contact(
                 name=name,
